@@ -69,7 +69,7 @@ Persistent run: use `tmux` (see README.md). Messages app must be open and signed
   replies when their `scheduled_time` arrives, so multiple conversations are handled
   concurrently instead of the process sleeping 3–12 min per reply.
 - **Two timing modes** (`timing.py`, `main.schedule`):
-  - *X / rapid:* ≥4 incoming msgs in 60s → wait for a ~30s pause (capped at 4 min), then reply fast.
+  - *X / rapid:* ≥3 incoming msgs in 60s (a burst) → wait for a ~10s pause (capped at 4 min), then reply fast.
   - *Y / baseline:* normal cadence → randomized 3–12 min delay, set once (not reset on each msg).
 - **Cancels a pending reply if Ryan replies to that chat himself** (avoids talking over him).
 - **Group chats skipped by default** (`REPLY_TO_GROUPS = False`).
@@ -79,10 +79,11 @@ Persistent run: use `tmux` (see README.md). Messages app must be open and signed
 
 ## Behavioral constraints (the persona — in `claude_api.SYSTEM_PROMPT`)
 
-- always lowercase, 1–3 sentences, casual, no assistant-speak.
-- never formally commit to plans; never agree to money; stay vague on favors.
-- **never reveal it's an AI.**
-- whitelist (`config.WHITELIST`: haya, dad, marcus) → no auto-reply, fire a notification.
+- natural, professional tone (no "yo"/slang), 1–3 sentences, no assistant-speak.
+- never formally commit to plans; never agree to money; stay non-committal on favors.
+- **draft-and-notify** (`config.ASSIST_CONTACTS`: tiara, dad, mom) → never auto-sent; the
+  bot drafts a reply and notifies Ryan so he reviews and sends it himself.
+- whitelist (`config.WHITELIST`: haya, marcus) → no auto-reply and no draft, just a notification.
 - plans/money/favor → still send a deflecting reply, AND set `flag` → notification.
 
 ## Open TODOs / next steps
