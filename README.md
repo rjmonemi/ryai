@@ -1,8 +1,8 @@
 # RyAI — iMessage Auto-Reply
 
 A Python bot that watches incoming iMessages, drafts replies in Ryan's texting style
-with the Claude API, and sends them automatically — while never auto-replying to a
-whitelist of close contacts.
+with the Claude API, and sends them automatically — except for close contacts, who are
+either drafted-and-handed-to-you (family/partner) or left entirely for you to answer.
 
 > **macOS only.** It depends on `chat.db`, AppleScript (`osascript`), and the Messages
 > app. It will not run on Windows or Linux. Write it anywhere; run it on the Mac.
@@ -13,12 +13,15 @@ whitelist of close contacts.
 
 - Polls `~/Library/Messages/chat.db` every ~15s for new incoming messages.
 - Decides *when* to reply using two modes:
-  - **X (rapid):** if someone sends 4+ messages in 60s, it waits for a natural pause
-    (~30s after their last message, capped at 4 min) and then replies fast.
+  - **X (rapid):** if someone sends 3+ messages in 60s (a "burst"), it waits for a
+    natural pause (~10s after their last message, capped at 4 min) and then replies fast.
   - **Y (baseline):** normal cadence → replies after a randomized 3–12 min delay.
-- Asks Claude (`claude-haiku-4-5-20251001`) for a short, lowercase, casual reply plus a
+- Asks Claude (`claude-haiku-4-5-20251001`) for a short, natural, professional reply plus a
   `flag` for anything about **plans / money / favors**.
-- **Whitelist:** Haya, Dad, Marcus never get an auto-reply — instead you get a macOS
+- **Draft-and-notify (Tiara, Dad, Mom):** these contacts are **never** auto-replied to.
+  When they text, the bot drafts a reply in your style and notifies you with it — you
+  review and send it yourself, so they're always talking to you, not a bot.
+- **Whitelist (Haya, Marcus):** never get an auto-reply and no draft — you just get a
   notification so you can answer them yourself.
 - **Flag:** flagged messages still get a deflecting reply *and* fire a notification so
   you can take over.
@@ -86,11 +89,13 @@ Everything tunable lives in `config.py`:
 
 | Setting | What it controls |
 |---|---|
-| `WHITELIST` | names that never get auto-replies (partial, case-insensitive) |
+| `ASSIST_CONTACTS` | draft-and-notify only — never auto-sent (Tiara, Dad, Mom) |
+| `WHITELIST` | names that get no auto-reply and no draft (partial, case-insensitive) |
 | `MODEL` / `MAX_TOKENS` | Claude model + reply length cap |
 | `BASELINE_MIN/MAX_SECONDS` | the 3–12 min baseline reply window |
-| `RAPID_FIRE_COUNT/WINDOW` | what counts as "rapid fire" |
+| `RAPID_FIRE_COUNT/WINDOW` | what counts as a burst (default 3 msgs / 60s) |
 | `RAPID_PAUSE_SECONDS` | how long to wait for a pause before replying in rapid mode |
+| `ASSIST_BATCH_SECONDS` | how long to batch a burst before surfacing a draft |
 | `REPLY_TO_GROUPS` | off by default — group chats are skipped |
 
 Ryan's persona / tone / rules live in `SYSTEM_PROMPT` in `claude_api.py`.

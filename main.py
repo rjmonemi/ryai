@@ -21,14 +21,21 @@ class Pending:
         self.sender_name = sender_name
         self.texts = []            # unreplied incoming message texts, in order
         self.timestamps = deque()  # rolling window of incoming msg unix times
-        self.mode = None           # "X" or "Y"
+        self.mode = None           # "X", "Y", or "assist"
         self.scheduled_time = None
         self.first_seen = None
+        self.assist = False        # draft-and-notify contact: never auto-send
 
 
 def is_whitelisted(name):
     low = name.lower()
     return any(w in low for w in config.WHITELIST)
+
+
+def is_assist(name):
+    """Draft-and-notify contacts: never auto-send; draft a reply for Ryan to send himself."""
+    low = name.lower()
+    return any(a in low for a in config.ASSIST_CONTACTS)
 
 
 def is_group(chat_identifier):
@@ -37,6 +44,13 @@ def is_group(chat_identifier):
 
 def schedule(pending, now):
     """(Re)compute when this reply should fire, based on the current cadence."""
+    if pending.assist:
+        # Draft-and-notify: never auto-send. Wait a short beat to batch a burst,
+        # then surface a draft — but never defer past the rapid-mode cap.
+        pending.mode = "assist"
+        cap = pending.first_seen + config.RAPID_MAX_WAIT_SECONDS
+        pending.scheduled_time = min(now + config.ASSIST_BATCH_SECONDS, max(cap, now))
+        return
     if timing.is_rapid_fire(list(pending.timestamps), now):
         # Variable X: keep pushing the reply out until they pause, but cap the total wait.
         pending.mode = "X"
@@ -121,8 +135,11 @@ def main():
                             continue
 
                         name = contacts.resolve(handle)
+                        assist = is_assist(name)
 
-                        if is_whitelisted(name):
+                        # Whitelist = notify only, no draft. Assist contacts are handled
+                        # below (drafted, never auto-sent), so they skip the whitelist.
+                        if not assist and is_whitelisted(name):
                             notifier.notify("RyAI", f"{name} texted you", text[:120])
                             continue
 
@@ -133,6 +150,7 @@ def main():
                             pendings[key] = p
                         p.handle = handle
                         p.sender_name = name
+                        p.assist = assist
                         p.texts.append(text)
                         p.timestamps.append(dbmod.apple_to_unix(row["date"]))
                         while p.timestamps and now - p.timestamps[0] > config.RAPID_FIRE_WINDOW:
@@ -153,12 +171,20 @@ def main():
                     if result is None:
                         print(f"[claude] no usable reply for {p.sender_name}; skipping")
                         continue
-                    if messenger.send(p.handle, result["reply"]):
-                        print(f"[sent -> {p.sender_name} ({p.mode})] {result['reply']}")
-                    if result["flag"]:
-                        notifier.notify("RyAI - check this one",
-                                        f"{p.sender_name} (plans/money/favor)",
-                                        combined[:120])
+                    if p.assist:
+                        # Never auto-send to these contacts — hand Ryan a ready-to-send
+                        # draft and let him review and send it himself.
+                        preview = combined[:80] + ("..." if len(combined) > 80 else "")
+                        notifier.notify(f"RyAI draft -> {p.sender_name}",
+                                        preview, result["reply"])
+                        print(f"[draft -> {p.sender_name}] {result['reply']}")
+                    else:
+                        if messenger.send(p.handle, result["reply"]):
+                            print(f"[sent -> {p.sender_name} ({p.mode})] {result['reply']}")
+                        if result["flag"]:
+                            notifier.notify("RyAI - check this one",
+                                            f"{p.sender_name} (plans/money/favor)",
+                                            combined[:120])
                 except Exception as e:
                     print(f"[reply] error for {p.sender_name}: {e}")
                 finally:
