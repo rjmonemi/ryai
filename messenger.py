@@ -1,4 +1,4 @@
-"""Send iMessages via AppleScript (the Messages app)."""
+"""Send texts via AppleScript (the Messages app)."""
 import subprocess
 
 # Handle and text are passed as `on run` arguments (not interpolated into the script),
@@ -13,20 +13,38 @@ on run {targetHandle, msgText}
 end run
 """
 
+# Same thing over SMS (green bubbles; needs Text Message Forwarding on the iPhone). Kept as
+# a separate script so a problem with it can never break the iMessage path.
+_SCRIPTS = {
+    "iMessage": _SCRIPT,
+    "SMS": _SCRIPT.replace("service type = iMessage", "service type = SMS"),
+}
 
-def send(handle, text):
-    """Send `text` to `handle` over iMessage. Returns True on success."""
+
+def send(handle, text, service=None):
+    """Send `text` to `handle`. Returns True on success.
+
+    Tries the service the chat uses first (iMessage, or SMS for SMS/RCS chats), then the other.
+    """
     if not handle or not text:
         return False
-    try:
-        result = subprocess.run(
-            ["osascript", "-e", _SCRIPT, handle, text],
-            capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode != 0:
-            print(f"[messenger] send failed: {result.stderr.strip()}")
+    order = ["SMS", "iMessage"] if service in ("SMS", "RCS") else ["iMessage", "SMS"]
+    errors = []
+    for svc in order:
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", _SCRIPTS[svc], handle, text],
+                capture_output=True, text=True, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            # It may have gone through anyway; don't risk sending it twice over the other service.
+            print(f"[messenger] send timed out ({svc})")
             return False
-        return True
-    except Exception as e:
-        print(f"[messenger] send error: {e}")
-        return False
+        except Exception as e:
+            print(f"[messenger] send error: {e}")
+            return False
+        if result.returncode == 0:
+            return True
+        errors.append(f"{svc}: {result.stderr.strip()}")
+    print(f"[messenger] send failed: {' | '.join(errors)}")
+    return False
