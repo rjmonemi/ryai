@@ -28,23 +28,47 @@ class ChatDB:
     def __init__(self, path=None):
         self.path = path or config.CHAT_DB_PATH
         self.conn = None
+        self.columns = set()  # message-table columns this macOS version has
 
     def connect(self):
         """Open chat.db read-only. Raises sqlite3.OperationalError on permission/locate errors."""
         uri = f"file:{self.path}?mode=ro"
         self.conn = sqlite3.connect(uri, uri=True, timeout=5)
         self.conn.row_factory = sqlite3.Row
+        # One message with broken UTF-8 shouldn't make every query that touches it fail.
+        self.conn.text_factory = lambda b: b.decode("utf-8", errors="replace")
+        self.columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(message)")}
 
-    def recent_messages(self, since_unix):
-        """Return message rows with date > since_unix, oldest first."""
-        threshold = unix_to_apple_ns(since_unix)
-        sql = """
+    def _optional(self, column):
+        """Select an optional message column, or NULL if this chat.db doesn't have it."""
+        if column in self.columns:
+            return f"m.{column} AS {column}"
+        return f"NULL AS {column}"
+
+    def _real_texts_only(self, keep_my_reactions=False):
+        """SQL that drops tapbacks/reactions and group events (renames, joins): not real texts.
+
+        With keep_my_reactions, your own tapbacks stay in: reacting to a text counts as answering it.
+        """
+        sql = ""
+        if "associated_message_type" in self.columns:
+            mine = "m.is_from_me = 1 OR " if keep_my_reactions else ""
+            sql += f" AND ({mine}COALESCE(m.associated_message_type, 0) = 0)"
+        if "item_type" in self.columns:
+            sql += " AND COALESCE(m.item_type, 0) = 0"
+        return sql
+
+    def _select_messages(self):
+        return f"""
             SELECT
                 m.ROWID            AS msg_id,
                 m.text             AS text,
                 m.attributedBody   AS attributed_body,
                 m.is_from_me       AS is_from_me,
                 m.date             AS date,
+                {self._optional("service")},
+                {self._optional("cache_has_attachments")},
+                {self._optional("associated_message_type")},
                 h.id               AS handle_id,
                 c.ROWID            AS chat_id,
                 c.chat_identifier  AS chat_identifier
@@ -52,10 +76,58 @@ class ChatDB:
             LEFT JOIN handle h            ON m.handle_id = h.ROWID
             LEFT JOIN chat_message_join j ON j.message_id = m.ROWID
             LEFT JOIN chat c              ON c.ROWID = j.chat_id
-            WHERE m.date > ?
-            ORDER BY m.date ASC
+        """
+
+    def max_rowid(self):
+        """The newest message row's ROWID (0 if there are none)."""
+        return self.conn.execute("SELECT MAX(ROWID) FROM message").fetchone()[0] or 0
+
+    def new_messages(self, after_rowid, up_to_rowid):
+        """Rows added since the last poll (after_rowid < ROWID <= up_to_rowid), oldest first.
+
+        Going by ROWID instead of a time window means nothing is missed when the Mac sleeps
+        or a text syncs over from your phone late.
+        """
+        sql = self._select_messages() + f"""
+            WHERE m.ROWID > ? AND m.ROWID <= ?{self._real_texts_only(keep_my_reactions=True)}
+            ORDER BY m.date ASC, m.ROWID ASC
+        """
+        return self.conn.execute(sql, (after_rowid, up_to_rowid)).fetchall()
+
+    def recent_messages(self, since_unix):
+        """Rows with date > since_unix, oldest first (used at startup)."""
+        threshold = unix_to_apple_ns(since_unix)
+        sql = self._select_messages() + f"""
+            WHERE m.date > ?{self._real_texts_only(keep_my_reactions=True)}
+            ORDER BY m.date ASC, m.ROWID ASC
         """
         return self.conn.execute(sql, (threshold,)).fetchall()
+
+    def chat_history(self, chat_identifier, limit):
+        """The last `limit` real messages with this person, both sides, oldest first.
+
+        Goes by chat_identifier (their handle), so an iMessage chat and an SMS chat with
+        the same number are read together.
+        """
+        if not chat_identifier:
+            return []
+        sql = f"""
+            SELECT
+                m.ROWID            AS msg_id,
+                m.text             AS text,
+                m.attributedBody   AS attributed_body,
+                m.is_from_me       AS is_from_me,
+                m.date             AS date,
+                {self._optional("cache_has_attachments")}
+            FROM message m
+            JOIN chat_message_join j ON j.message_id = m.ROWID
+            JOIN chat c              ON c.ROWID = j.chat_id
+            WHERE c.chat_identifier = ?{self._real_texts_only()}
+            ORDER BY m.date DESC, m.ROWID DESC
+            LIMIT ?
+        """
+        rows = self.conn.execute(sql, (chat_identifier, limit)).fetchall()
+        return list(reversed(rows))
 
     def close(self):
         if self.conn:
@@ -99,7 +171,13 @@ def decode_attributed_body(blob):
 
 
 def message_text(row):
-    """Return the best available text for a message row (text column, else attributedBody)."""
-    if row["text"]:
-        return row["text"]
-    return decode_attributed_body(row["attributed_body"])
+    """Return the best available text for a message row (text column, else attributedBody).
+
+    Attachments appear in the text as U+FFFC placeholder characters; those are stripped,
+    so a photo with no caption returns None.
+    """
+    text = row["text"] or decode_attributed_body(row["attributed_body"])
+    if not text:
+        return None
+    text = text.replace("￼", "").strip()
+    return text or None
