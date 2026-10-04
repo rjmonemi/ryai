@@ -22,6 +22,8 @@ CHAT_DB_PATH = os.path.expanduser("~/Library/Messages/chat.db")
 WHITELIST = [
     "haya",
     "marcus",
+    # tip: add their phone numbers too (e.g. "+19095551234"), so they're covered even if a
+    # contact is saved under some other name
 ]
 
 # INSTANT_REPLY: these people get an answer as soon as the bot sees their text, instead
@@ -36,7 +38,8 @@ INSTANT_REPLY = [
 # --- Polling ---
 POLL_INTERVAL_SECONDS = 15      # how often we check chat.db for new texts
 TICK_SECONDS = 1                # main-loop granularity for firing scheduled replies
-LOOKBACK_SECONDS = 120          # each check looks at texts from the last N seconds
+MAX_TEXT_AGE_SECONDS = 600      # a text already older than this when the bot first sees it
+                                # (say the Mac was asleep) is left for you to answer
 
 # --- Convo mode (rapid back-and-forth) ---
 RAPID_FIRE_COUNT = 3            # >= this many texts from them ...
@@ -61,4 +64,5 @@ TYPING_MAX_SECONDS = 6.0
 FORCE_LOWERCASE = True          # ryan texts in all lowercase
 
 # --- Behavior ---
-REPLY_TO_GROUPS = False         # group chats are skipped by default (auto-replying to them is risky)
+REPLY_TO_GROUPS = False         # group chats are skipped by default (auto-replying to them is risky;
+                                # if turned on, replies go to the sender's 1:1 chat, not the group)

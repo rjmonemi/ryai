@@ -149,8 +149,9 @@ def generate_reply(sender_name, history, new_texts, now, unknown=False):
                 **request,
                 output_config={"format": {"type": "json_schema", "schema": _REPLY_SCHEMA}},
             )
-        except anthropic.BadRequestError:
-            # If the same request goes through without the schema, the schema was the problem.
+        except (anthropic.BadRequestError, TypeError):
+            # If the same request goes through without the schema, the schema was the problem
+            # (TypeError: an anthropic package too old to know output_config).
             resp = client.messages.create(**request)
             _use_schema = False
             print("[claude] structured output not accepted; reading plain json from now on")
@@ -182,8 +183,9 @@ def _parse(text):
         texts = [texts]
     if not isinstance(texts, list):
         texts = []
-    texts = [humanize(t) for t in texts if isinstance(t, str)]
-    texts = [t for t in texts if t][:config.MAX_REPLY_TEXTS]
+    texts = [t for t in (humanize(t) for t in texts if isinstance(t, str)) if t]
+    texts = [t for i, t in enumerate(texts) if i == 0 or t != texts[i - 1]]  # no "lol" "lol"
+    texts = texts[:config.MAX_REPLY_TEXTS]
     skip = _is_true(data.get("skip")) or not texts
     return {"texts": [] if skip else texts, "flag": _is_true(data.get("flag")), "skip": skip}
 

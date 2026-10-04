@@ -53,7 +53,7 @@ is blocked on this Mac (a personal Mac mini was the fallback plan).
 ## Run it
 
 ```bash
-python3 -m pip install -r requirements.txt
+python3 -m pip install -U -r requirements.txt
 export ANTHROPIC_API_KEY="sk-ant-..."   # never commit this; read from env only
 python3 main.py
 ```
@@ -77,8 +77,20 @@ Persistent run: use `tmux` (see README.md). Messages app must be open and signed
 
 - **Scheduler, not blocking sleeps.** The loop ticks every `TICK_SECONDS` (1s) and fires
   replies when their `scheduled_time` arrives, so multiple conversations are handled
-  concurrently. Extra texts of a split reply wait in an outbox, not in a `sleep`.
-- **Per-chat state survives replies** (`main.Chat`), so convo mode and takeover persist.
+  concurrently. Replies wait in an outbox and go out on the *next* tick, after one more
+  look at chat.db (so a text Ryan sent while Claude was writing cancels it).
+- **Poll by ROWID, not a time window** (`db.new_messages`), so nothing is missed when the
+  Mac sleeps or a text syncs over late. Incoming texts already older than
+  `MAX_TEXT_AGE_SECONDS` when seen are left for Ryan; replies whose text is >30 min old
+  by the time they'd go out are dropped (`main.STALE_REPLY_SECONDS`).
+- **Per-person state survives replies** (`main.Chat`, keyed by normalized handle so an
+  iMessage chat and an SMS chat with the same number are one person). Takeover also
+  applies by contact name, covering someone's phone *and* email.
+- **Fail closed on Contacts:** the bot won't start if Contacts can't be read, and never
+  auto-replies to someone `contacts.resolve` can't identify (returns None). The whitelist
+  is re-checked right before writing and before sending each text.
+- **Restart memory:** at startup, texts sent from Ryan's account in the last
+  `TAKEOVER_SECONDS` re-create their takeovers.
 - **Three timing modes** (`main.Bot._schedule`):
   - *instant:* `INSTANT_REPLY` contacts → reply as soon as the text is seen.
   - *convo:* ≥3 texts from them within 60s (by message timestamps) → reply once they've been
@@ -88,17 +100,19 @@ Persistent run: use `tmux` (see README.md). Messages app must be open and signed
 - **Re-check chat.db right before replying** (and before each queued follow-up text), so a
   text that just arrived is folded in / pushes the reply back instead of being talked over.
 - **Echo detection:** the bot's own sends appear in chat.db as `is_from_me` rows; they're
-  matched against recently sent texts so they're never mistaken for Ryan.
-- **Takeover:** when Ryan texts a chat himself (phone or Mac), pending/queued replies for it
-  are dropped and the bot stays out of that chat for `TAKEOVER_SECONDS`.
+  matched (by text, against the row's own timestamp) to recently sent texts so they're
+  never mistaken for Ryan.
+- **Takeover:** when Ryan texts or reacts in a chat himself (phone or Mac), pending/queued
+  replies for it are dropped and the bot stays out of that chat for `TAKEOVER_SECONDS`.
 - **Group chats skipped by default** (`REPLY_TO_GROUPS = False`). Tapbacks/reactions,
   group events, caption-less photos and short-code senders never trigger a reply.
 - **attributedBody decoding** in `db.py`: modern macOS often stores message text in a
   binary blob, not the `text` column. Decode is best-effort; undecodable msgs are skipped.
 - **No backlog replies on startup** — only messages that arrive after launch get answered.
-- **Contacts:** one bulk read, digits-normalized (contacts are stored formatted); misses
-  and failures fall back to the old one-by-one search so the whitelist can't silently break.
-  Lists also accept phone numbers/emails in case Contacts access is denied.
+- **Contacts:** one bulk read, digits-normalized (contacts are stored formatted, so the old
+  "contains the 10 digits" search never matched them). A read with no numbers/emails counts
+  as a failure; a refresh failure keeps the previous copy. A number shared by several
+  contacts keeps every name. Lists also accept phone numbers/emails.
 - **Structured outputs** (`output_config` json_schema) for the reply; if the API ever
   rejects it, `claude_api` falls back to parsing plain JSON for the rest of the run.
 
@@ -131,7 +145,8 @@ Persistent run: use `tmux` (see README.md). Messages app must be open and signed
 
 ## Conventions
 
-- Run with `python3` (the Mac has 3.9 — no 3.10+ syntax). Single dependency: `anthropic`.
+- Run with `python3` (the Mac has 3.9 — no 3.10+ syntax). Single dependency: `anthropic`
+  (>=0.77.0 for `output_config`; the Mac had 0.111.0).
 - Tests: `python3 -m unittest test_bot` (runs anywhere; keep them passing).
 - API key only ever via `ANTHROPIC_API_KEY` env var. `.gitignore` blocks `.env` files.
 - Model: `claude-haiku-4-5-20251001` (chosen for cost; ~$2–6/mo expected).

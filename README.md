@@ -28,8 +28,13 @@ replies, and a whitelist of people never gets an auto-reply at all.
   so you can answer them yourself.
 - **Flag:** plans / money / favors still get a non-committal reply *and* a notification
   so you can take over.
-- **You take over:** the moment you text someone yourself (phone or Mac), the bot drops
-  any pending reply to them and stays out of that chat for 10 minutes.
+- **You take over:** the moment you text (or react to) someone yourself, from your phone
+  or the Mac, the bot drops any pending reply to them and stays out of that chat for
+  10 minutes. It remembers this across a restart.
+- **Needs Contacts:** it won't start without Contacts access, and it never auto-replies to
+  someone it can't identify, so the whitelist can't be skipped by accident.
+- **If the Mac sleeps:** replies that came due get sent when it wakes, unless the text is
+  over 30 minutes old by then. Those are left for you.
 - Ignores tapbacks/reactions, group chats, photos with no caption, and short-code senders.
 
 ---
@@ -44,7 +49,7 @@ python3 --version      # 3.9+ is fine
 ### 2. Install the dependency
 ```bash
 cd ryai
-python3 -m pip install -r requirements.txt
+python3 -m pip install -U -r requirements.txt
 ```
 
 ### 3. Set your Claude API key
@@ -63,9 +68,10 @@ won't take effect.
 > and nothing else matters — check this first.
 
 ### 5. Make sure Messages is open and signed in
-AppleScript sends through the running Messages app. The first time the bot sends a text
-(or looks up a contact name), macOS asks whether your terminal may control **Messages**
-(and **Contacts**). Click **OK**. If you clicked "Don't Allow", turn it back on in
+AppleScript sends through the running Messages app. When the bot starts, it reads your
+Contacts (to know who's who), and the first time it sends a text it uses Messages, so
+macOS asks whether your terminal may control **Contacts** and **Messages**. Click **OK**.
+If you clicked "Don't Allow", turn it back on in
 `System Settings → Privacy & Security → Automation`.
 
 ### 6. Keep the Mac awake
@@ -115,6 +121,7 @@ Everything tunable lives in `config.py`:
 | `CONVO_IDLE_SECONDS` | how long a convo lasts with no texts before it's back to normal (5 min) |
 | `BASELINE_MIN/MAX_SECONDS` | the 3–12 min reply window for everyone else |
 | `TAKEOVER_SECONDS` | how long the bot stays out of a chat after you text in it (10 min) |
+| `MAX_TEXT_AGE_SECONDS` | texts already older than this when the bot first sees them (Mac was asleep) are left for you (10 min) |
 | `HISTORY_MESSAGES` | how many recent messages Claude sees for context |
 | `MAX_REPLY_TEXTS` / `TYPING_*` | splitting a reply into separate texts, and the pause between them |
 | `MODEL` / `MAX_TOKENS` | Claude model + reply length cap |
@@ -148,7 +155,8 @@ ryai/
 - Many modern messages store text in `attributedBody` (not `text`); `db.py` decodes it
   best-effort. If a message's text can't be decoded, the bot just skips it.
 - Group chats are skipped by default — auto-replying to a group is a good way to get caught.
-- Names come from the Contacts app. If Contacts access is denied, names can't be matched,
-  so put phone numbers in `WHITELIST` / `INSTANT_REPLY` if you need them to work anyway.
+- Names come from the Contacts app. The bot won't start without it, and if Contacts stops
+  answering while it runs, it stops auto-replying until it can read it again. Adding
+  people's phone numbers to `WHITELIST` too is the most reliable way to cover them.
 - Notifications only show up on the Mac running the bot.
 - The loop never crashes on a single bad message; errors are printed and it continues.
